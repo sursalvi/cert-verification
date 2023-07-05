@@ -1,0 +1,166 @@
+Created by Salvi Surjeet (BD/XTP4), last modified on 2023, Jul 03 Current Version V 9Page Info
+Red Hat delivers signatures for the images in the Red Hat Container Registries. Those signatures can be automatically verified when being pulled to OpenShift Container Platform 4 clusters by using the Machine Config Operator (MCO).
+
+Quay.io serves most of the images that make up the OpenShift Container Platform, and only the release image is signed. Release images refer to the approved OpenShift Container Platform images, offering protection against supply chain attacks. However, some extensions to the OpenShift Container Platform, such as logging, monitoring, and service mesh, are shipped as Operators from the Operator Lifecycle Manager (OLM). Those images ship from the Red Hat Ecosystem Catalog Container images registry.
+
+To verify the integrity of those images between Red Hat registries and your infrastructure, enable signature verification as mentioned in the link.
+
+NOTE: The Image verification for the images pulled from Catalog Source is done at the container level (using crictl or podman). Since the image signature validation is done at the container level, Openshift does not collect the logs. 
+Openshift Release Image validation during installation.
+During the installation process, the required release image is pulled by the openshift-installer binary.  The SHA256 of the images is embedded inside the openshift-installer binary that ensures the right image is pulled during the installation process.
+Openshift Release Image validation during updates.
+CVO (cluster-version operator) performs signature verification for the release images. There is a pre-configured configmap "release-verification" under the namespace "openshift-config-managed" that contains the following which will verify the image signature.
+The public part of the key pair by which the release images are signed.
+Location of the image's signature. 
+
+$ oc get cm/release-verification -n openshift-config-managed
+NAME                   DATA   AGE
+release-verification   3      124d
+
+
+
+$ oc describe cm/release-verification -n openshift-config-managed
+Name:         release-verification
+Namespace:    openshift-config-managed
+Data
+====
+store-openshift-official-release:
+----
+https://storage.googleapis.com/openshift-release/official/signatures/openshift/release
+store-openshift-official-release-mirror:
+----
+https://mirror.openshift.com/pub/openshift-v4/signatures/openshift/release
+verifier-public-key-redhat:
+----
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+.
+
+.
+
+-----END PGP PUBLIC KEY BLOCK-----
+
+To test the image verification we can perform the following manual steps.
+Let's say we are updating the Openshift cluster from version 4.11.40 to 4.11.41. Extract the release-image SHA256 value for the new version 4.11.41.
+
+$ oc adm release info 4.11.41 -o jsonpath='{.image}'
+
+quay.io/openshift-release-dev/ocp-release@sha256:400267c7f4e61c6bfa0a59571467e8bd85c9188e442cbd820cc8263809be3775
+
+Download the signature for the release-image 4.11.41 (stored under /tmp/signature-1). Ensure you use the same SHA25 image value from the above command.  
+
+curl -sL https://mirror.openshift.com/pub/openshift-v4/signatures/openshift/release/sha256=400267c7f4e61c6bfa0a59571467e8bd85c9188e442cbd820cc8263809be3775/signature-1 -o /tmp/signature-1
+Now we need to import the Red Hat Public key that can be used to decrypt the image signature.
+
+$ oc get cm -n openshift-config-managed release-verification -o jsonpath='{.data.verifier-public-key-redhat}' | gpg2 --import
+Decrypt the image signature using the same Red Hat Public key.
+
+$ gpg2 --decrypt /tmp/signature-1 2>/dev/null|jq
+
+{
+  "critical": {
+    "image": {
+      "docker-manifest-digest": "sha256:400267c7f4e61c6bfa0a59571467e8bd85c9188e442cbd820cc8263809be3775"   <==== matches the above sha256 value.
+    },
+    "type": "atomic container signature",
+    "identity": {
+      "docker-reference": "quay.io/openshift-release-dev/ocp-release:4.11.41-x86_64"
+    }
+  },
+  "optional": {
+    "creator": "Red Hat OpenShift Signing Authority 0.0.1"
+  }
+}
+
+
+How to check SHA256 values for each release-image.
+Extract the release image to view the content
+
+$ oc adm release extract <release-image version>
+Open any definition file for the component you need to verify the image sha256 value
+
+$ cat 0000_20_etcd-operator_06_deployment.yaml | grep -i -A 6 env
+        env:
+        - name: IMAGE
+          value: quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:981206e427d688954d94cb543d6b66836cd9ac7d65d690b1fd48edcb040b03e8
+        - name: OPERATOR_IMAGE
+          value: quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:db5d55b809c340d723d67a14099771f0a7f6d7c210f01b17755991bd59ceca90
+        - name: OPERATOR_IMAGE_VERSION
+          value: "4.11.41"
+How Podman/crictl performs the signature validation. 
+Configure the /etc/containers/policy.json to include the Red Hat signature store as per the steps mentioned in link.
+Now try to pull any image from Red Hat registry. Please use the log-level as "debug" to print all logs. 
+
+CAPTURED FEW LOGS FROM THE TEST CLUSTER
+
+******************************
+
+DEBU[0000] Cached value indicated that metacopy is not being used 
+
+DEBU[0000] NewControl(/var/lib/containers/storage/overlay): nextProjectID = 2592643555 
+
+DEBU[0000] Cached value indicated that native-diff is usable 
+
+DEBU[0000] backingFs=xfs, projectQuotaSupported=true, useNativeDiff=true, usingMetacopy=false 
+
+DEBU[0000] Initializing event backend file              
+
+DEBU[0000] Configured OCI runtime kata initialization failed: no valid executable found for OCI runtime kata: invalid argument 
+
+DEBU[0000] Configured OCI runtime runsc initialization failed: no valid executable found for OCI runtime runsc: invalid argument 
+
+DEBU[0000] Configured OCI runtime krun initialization failed: no valid executable found for OCI runtime krun: invalid argument 
+
+DEBU[0000] Using OCI runtime "/usr/bin/runc"            
+
+INFO[0000] Setting parallel job count to 13             
+
+DEBU[0000] Pulling image registry.redhat.io/rhscl/httpd-24-rhel7:2.4-195 (policy: always) 
+
+....
+
+DEBU[0000]  Using "docker" namespace registry.redhat.io 
+
+DEBU[0000]   Using https://registry.redhat.io/containers/sigstore 
+
+DEBU[0000] Looking for TLS certificates and private keys in /etc/docker/certs.d/registry.redhat.io 
+
+...
+
+DEBU[0001]  Using transport "docker" specific policy section registry.redhat.io 
+
+DEBU[0001] GET https://registry.redhat.io/containers/sigstore/rhscl/httpd-24-rhel7@sha256=58f4b573e3ab797b3c81123d6c9545703b98418061d3cb3d8081bdbbe9e00dbd/signature-1 
+
+DEBU[0002] GET https://registry.redhat.io/containers/sigstore/rhscl/httpd-24-rhel7@sha256=58f4b573e3ab797b3c81123d6c9545703b98418061d3cb3d8081bdbbe9e00dbd/signature-2 
+
+DEBU[0002] GET https://registry.redhat.io/containers/sigstore/rhscl/httpd-24-rhel7@sha256=58f4b573e3ab797b3c81123d6c9545703b98418061d3cb3d8081bdbbe9e00dbd/signature-3 
+
+DEBU[0003] GET https://registry.redhat.io/containers/sigstore/rhscl/httpd-24-rhel7@sha256=58f4b573e3ab797b3c81123d6c9545703b98418061d3cb3d8081bdbbe9e00dbd/signature-4 
+
+DEBU[0004] GET https://registry.redhat.io/containers/sigstore/rhscl/httpd-24-rhel7@sha256=58f4b573e3ab797b3c81123d6c9545703b98418061d3cb3d8081bdbbe9e00dbd/signature-5 
+
+DEBU[0005] GET https://registry.redhat.io/containers/sigstore/rhscl/httpd-24-rhel7@sha256=58f4b573e3ab797b3c81123d6c9545703b98418061d3cb3d8081bdbbe9e00dbd/signature-6 
+
+DEBU[0005] GET https://registry.redhat.io/containers/sigstore/rhscl/httpd-24-rhel7@sha256=58f4b573e3ab797b3c81123d6c9545703b98418061d3cb3d8081bdbbe9e00dbd/signature-7 
+
+DEBU[0006]  Requirement 0: allowed                      
+
+DEBU[0006] Overall: allowed                             
+
+DEBU[0006] Downloading /v2/rhscl/httpd-24-rhel7/blobs/sha256:ef75f9ef1b99495523234e276aad1cc7ad2e410b5c46cf7ab4ef17825dbf324e 
+
+DEBU[0006] GET https://registry.redhat.io/v2/rhscl/httpd-24-rhel7/blobs/sha256:ef75f9ef1b99495523234e276aad1cc7ad2e410b5c46cf7ab4ef17825dbf324e 
+
+Getting image source signatures
+
+NOTE - 
+
+The container runtimes of CRI-O and podman, and any others that have a base reliance on the containers/image library which is shared among them will reject container images that do not match a signature. Signature failures are logged and the runtime will refuse to pull it depending on the policy.json acceptance criteria. There is no message for success other than the normal container image successful pulling message. So, therefore, on success and during normal operations, the results of signature checking are not printed, only in the case of failure or in some cases by putting CRI-O into full debug mode. If we enable debug level, this would increase crio logging and we may ran into issues were crio is using all journal log space depending on workloads
+
+
+
+FEW IMPORTANT LINKS - 
+CRIO Debug level enable link
+Link to logic for obtaining the signature from the registry.
+Link to signature path from the containers/image library 
+Link to the image pulling capabilities of CRI-O
