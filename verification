@@ -1,4 +1,3 @@
-Created by Salvi Surjeet (BD/XTP4), last modified on 2023, Jul 03 Current Version V 9Page Info
 Red Hat delivers signatures for the images in the Red Hat Container Registries. Those signatures can be automatically verified when being pulled to OpenShift Container Platform 4 clusters by using the Machine Config Operator (MCO).
 
 Quay.io serves most of the images that make up the OpenShift Container Platform, and only the release image is signed. Release images refer to the approved OpenShift Container Platform images, offering protection against supply chain attacks. However, some extensions to the OpenShift Container Platform, such as logging, monitoring, and service mesh, are shipped as Operators from the Operator Lifecycle Manager (OLM). Those images ship from the Red Hat Ecosystem Catalog Container images registry.
